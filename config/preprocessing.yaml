@@ -1,0 +1,69 @@
+# ==========================================
+# 数据预处理配置
+# ==========================================
+
+# 时间对齐设置
+time_alignment:
+  time_window_days: 30           # 时间窗口大小（天）
+  aggregation_method: "max"       # 聚合方法: max, sum, union, intersection
+  relative_time_axis: true       # 使用相对时间轴
+
+# 症状提取配置
+symptom_extraction:
+  # LLM提取配置
+  use_llm: true
+  llm_model: "gpt-4o-mini"        # 或本地模型
+  llm_temperature: 0.0
+
+  # 规则提取配置（备选）
+  use_regex: true                # 同时使用正则表达式作为备选
+
+  # 症状严重程度分级
+  severity_levels:
+    none: 0                       # 无、"无XX"、"XX改善"
+    mild: 1                       # 轻度、"偶有"、"XX"
+    moderate: 1                   # 中度
+    severe: 2                     # 重度、"明显"、"剧烈"
+
+  # 关键词词典
+  keyword_file: "docs/knowledge_base/tcm_symptoms.md"
+
+# 药物映射配置
+medicine_mapping:
+  # 药物功效类别
+  efficacy_categories:
+    - 补气药
+    - 养血药
+    - 滋阴药
+    - 温阳药
+    - 活血化瘀药
+    - 清热解毒药
+    - 化痰止咳药
+    - 理气药
+    - 消食药
+    - 安神药
+
+  # 映射文件
+  mapping_file: "docs/knowledge_base/herbs_mapping.md"
+
+  # 剂量标准化（可选）
+  standardize_dosage: false
+  default_dosage_g: 10
+
+# 证型编码配置
+syndrome_encoding:
+  encoding_type: "multi-hot"      # multi-hot, embedding
+  max_categories: 20              # 最多保留的证型数量
+  min_frequency: 5                # 最小样本频率
+
+# 特征降维
+feature_reduction:
+  max_features: 50                # 最大特征数（因果发现）
+  min_prevalence: 0.10            # 最小流行率（10%样本）
+  variance_threshold: 0.01        # 方差阈值
+
+# 数据质量检查
+quality_control:
+  missing_threshold: 0.5          # 缺失值阈值
+  outlier_detection: true         # 异常值检测
+  balance_check: true             # 平衡性检查

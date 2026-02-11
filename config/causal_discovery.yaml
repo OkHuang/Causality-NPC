@@ -1,0 +1,147 @@
+# ==========================================
+# 目标二：因果发现配置
+# ==========================================
+
+# 时序数据构建
+temporal_data:
+  # 时间滞后设置
+  lag_steps: [1]                  # [1] 表示 t -> t+1; [1,2] 表示 t->t+1, t->t+2
+  include_instantaneous: false    # 是否包含瞬时边（t时刻）
+
+  # 数据对构建
+  max_time_gap_days: 180          # 最大时间间隔（超过则不构建对）
+  min_time_gap_days: 7            # 最小时间间隔（过短可能无效应）
+
+  # 变量分组
+  variable_groups:
+    - name: "symptoms"
+      source: "chief_complaint"
+      prefix: "S_"
+    - name: "medicines"
+      source: "chinese_medicines"
+      prefix: "M_"
+    - name: "syndromes"
+      source: "chinese_diagnosis"
+      prefix: "D_"
+    - name: "demographics"
+      source: "patient_info"
+      prefix: "P_"
+
+# 因果发现算法
+algorithm:
+  name: "pc"                      # pc, fci, ges, notear
+  alpha: 0.20                     # 显著性水平 (放宽至0.20以发现更多边)
+  independence_test: "chisq"      # fisherz (连续), chisq (离散), kernel (非线性) - 使用卡方检验适合稀疏计数数据
+
+  # FCI算法配置（如果选择FCI）
+  fci:
+    max_degree: -1                # 最大父节点数 (-1表示无限制)
+    faithfulness: true            # 忠实性假设
+
+  # PC算法配置（如果选择PC）
+  pc:
+    max_degree: -1
+    conflicts: "prioritize"       # prioritize, postpone
+
+# 硬约束定义
+constraints:
+  # 时间约束（必须）
+  temporal:
+    - type: "forbid"
+      rule: "no_future_to_past"
+      description: "禁止t+1时刻的变量指向t时刻"
+
+    - type: "forbid"
+      rule: "no_instantaneous_treatment"
+      description: "禁止药物_t -> 症状_t"
+
+  # 领域知识约束（可选）
+  domain_knowledge:
+    - type: "require"
+      rule: "symptoms_to_medicine_forbidden"
+      description: "症状不能指向药物（反向因果）"
+
+    - type: "require"
+      rule: "demographics_timeless"
+      description: "人口学变量不随时间变化"
+
+  # 专家规则（从文件加载）
+  expert_rules_file: "docs/knowledge_base/expert_rules.md"
+
+# 稳定性选择
+stability_selection:
+  n_bootstrap: 10                 # Bootstrap次数（临时改为10次测试）
+  sampling_ratio: 0.8             # 每次采样比例
+  selection_threshold: 0.60       # 边选择概率阈值（降低到60%以保留更多边）
+
+  # 并行计算
+  n_jobs: -1                      # -1表示使用所有CPU核心
+  verbose: 1
+
+# 图后处理
+post_processing:
+  # 剪枝策略
+  pruning:
+    - method: "stability"         # 基于稳定性
+      threshold: 0.85
+
+    - method: "knowledge"         # 基于领域知识
+      use_expert_rules: true
+
+    - method: "orientation"       # 方向修正
+      enforce_temporal_order: true
+
+  # 最大边数
+  max_edges: 100                  # 保留的最多边数
+
+# 路径提取
+path_extraction:
+  # 感兴趣的路径模式
+  patterns:
+    - pattern: "syndrome -> medicine -> symptom"
+      description: "证型->药物->症状路径"
+
+    - pattern: "symptom_t -> medicine_t -> symptom_t+1"
+      description: "症状改善路径"
+
+  # 最长路径长度
+  max_path_length: 4
+
+# 可视化
+visualization:
+  # 节点样式
+  node_styles:
+    symptoms:
+      color: "#FF6B6B"
+      shape: "box"
+    medicines:
+      color: "#4ECDC4"
+      shape: "ellipse"
+    syndromes:
+      color: "#45B7D1"
+      shape: "diamond"
+    demographics:
+      color: "#96CEB4"
+      shape: "hexagon"
+
+  # 边样式
+  edge_styles:
+    confident:
+      color: "#2C3E50"
+      width: 2.0
+    moderate:
+      color: "#7F8C8D"
+      width: 1.5
+    weak:
+      color: "#BDC3C7"
+      width: 1.0
+
+  # 布局
+  layout: "hierarchical"          # hierarchical, force_directed, circular
+
+# 输出
+output:
+  save_graph_format: ["gml", "json"]  # gml, json, graphml
+  save_edges_csv: true            # 保存边列表
+  generate_report: true           # 生成发现报告
+  export_paths: true              # 导出关键路径

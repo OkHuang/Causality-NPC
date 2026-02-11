@@ -1,0 +1,44 @@
+# ==========================================
+# 鼻咽癌因果推断项目 - 基础配置
+# ==========================================
+
+project:
+  name: "Causality-NPC"
+  version: "0.1.0"
+  description: "鼻咽癌中西医结合诊疗因果推断与动态网络发现"
+
+# 数据路径配置
+paths:
+  data_dir: "data"
+  raw_data: "data/raw"
+  processed_data: "data/processed"
+  features: "data/features"
+  models: "data/models"
+  outputs: "outputs"
+
+# 全局设置
+settings:
+  random_seed: 42
+  n_bootstrap: 1000              # Bootstrap重采样次数
+  confidence_threshold: 0.85     # 边置信度阈值
+  max_workers: 4                 # 并行任务数
+  log_level: "INFO"              # 日志级别
+
+# 患者队列设置
+cohort:
+  min_follow_up: 30              # 最小随访天数
+  max_time_gap: 180              # 最大时间间隔（天）- 超过则认为因果链断裂
+  min_visits: 2                  # 最小就诊次数
+
+# 中医知识库配置
+knowledge_base:
+  symptom_dictionary: "docs/knowledge_base/tcm_symptoms.md"
+  herbs_mapping: "docs/knowledge_base/herbs_mapping.md"
+  expert_rules: "docs/knowledge_base/expert_rules.md"
+
+# 可视化设置
+visualization:
+  figure_dpi: 300
+  style: "seaborn-v0_8-darkgrid"
+  color_palette: "Set2"
+  graph_layout: "hierarchical"   # dag, hierarchical, circular
