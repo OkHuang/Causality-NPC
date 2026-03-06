@@ -35,37 +35,42 @@ env/
 # VSCode
 .vscode/
 
-# Data
-data/raw/*
-!data/raw/.gitkeep
-data/processed/*
-!data/processed/.gitkeep
+# ==================== 数据文件 ====================
+# 输入数据
+Data/
+data/
 
-# Outputs
-outputs/figures/*
-outputs/reports/*
-outputs/graphs/*
-!outputs/.gitkeep
+# 输出数据
+outputs/
 
-# Models
-data/models/*
-!data/models/.gitkeep
+# ==================== 模型文件 ====================
+data/models/
+models/
 
-# Logs
-*.log
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Environment variables
-.env
-.env.local
-
-# Temporary files
+# ==================== 临时文件 ====================
+Data/temp/
+temp/
 *.tmp
 *.swp
 *~
 
-# Keep directories
-!.gitkeep
+# ==================== 日志文件 ====================
+*.log
+
+# ==================== 操作系统 ====================
+.DS_Store
+Thumbs.db
+
+# ==================== 环境变量（最重要！） ====================
+.env
+.env.local
+.env.*.local
+
+# ==================== 测试文件 ====================
+test_*.py
+check_*.py
+merge_*.py
+
+# ==================== Office临时文件 ====================
+~$*
+*.tmp
