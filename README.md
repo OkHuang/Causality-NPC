@@ -1,312 +1,339 @@
 # 鼻咽癌因果推断项目 (Causality-NPC)
 
-**中西医结合诊疗的因果推断与动态网络发现**
+**中西医结合诊疗的因果推断研究**
 
-版本: 0.1.0
-
----
-
-## 项目简介
-
-本项目旨在利用因果推断方法，从963条鼻咽癌患者的中西医结合诊疗数据中，**量化中药疗效**并**发现因果机制**。
-
-### 研究目标
-
-#### 目标一：验证性因果推断
-- 模拟随机对照试验（RCT）
-- 评估特定药物/疗法对症状的因果效应
-- 方法：倾向性评分匹配（PSM）+ ATE估计
-
-#### 目标二：因果发现
-- 构建症状-药物-证型的因果网络
-- 挖掘潜在的因果路径
-- 方法：PC/FCI算法 + Bootstrap稳定性选择
+版本: 1.0.0 | 最后更新: 2026-03-06
 
 ---
 
-## 项目结构
+## 📋 项目简介
+
+本项目旨在利用**因果推断方法**，从鼻咽癌患者的中西医结合诊疗数据中：
+
+1. **提取结构化症状**：从自由文本主诉中提取标准化症状
+2. **发现因果关系**：构建症状-药物-证型的因果网络
+3. **量化因果效应**：计算药物对症状的真实疗效（**开发中**）
+
+---
+
+## 🎯 已实现功能
+
+### 功能1：中医症状实体抽取 ✅
+
+**目标**：将患者自由文本主诉转换为结构化症状数据
+
+#### 技术方案
+- **LLM引擎**：Azure OpenAI GPT-4
+- **框架**：LangChain + Pydantic
+- **症状词典**：41种标准化症状
+- **严重程度分级**：0=无，1=轻度，2=重度
+
+#### 标准症状词典
+```python
+{
+    # 头颈部
+    "精神", "头痛", "头晕", "畏寒",
+
+    # 耳鼻喉
+    "耳鸣", "听力下降", "耳胀闷", "鼻塞", "流涕", "咽干", "咽痛",
+
+    # 呼吸道
+    "咳嗽", "咳痰", "气促",
+
+    # 消化系统
+    "恶心", "呕吐", "胃胀", "反酸", "口干", "口苦",
+
+    # 精神睡眠
+    "失眠", "多梦", "易醒",
+
+    # 排泄
+    "便秘", "腹泻", "夜尿",
+
+    # 疼痛相关
+    "颈痛", "肩痛", "骨痛",
+
+    # 全身症状
+    "发热", "消瘦", "心悸"
+}
+```
+
+#### 使用方法
+```bash
+# 运行症状抽取
+python examples/extract_npc_full.py
+```
+
+#### 输入输出
+**输入**：`Data/raw/npc_full.csv`
+```csv
+patient_id, chief_complaint, ...
+001, "鼻咽癌放化疗后11年余，精神疲倦乏力，咽干严重，偶有咳嗽"
+```
+
+**输出**：`Data/raw/npc_full_with_symptoms.csv`
+```csv
+patient_id, chief_complaint, extracted_symptoms
+001, "...", "[{"name": "乏力", "severity": 1, "label": "轻度"},
+             {"name": "咽干", "severity": 2, "label": "重度"}]"
+```
+
+#### 数据规模
+- **原始记录**：963条就诊记录
+- **患者总数**：239人
+- **提取症状**：41种标准症状
+
+---
+
+### 功能2：简单因果发现 ✅
+
+**目标**：从时序数据中自动发现变量间的因果关系
+
+#### 技术方案
+- **算法**：PC算法（Peter-Clark算法）
+- **独立性检验**：Fisher-Z检验
+- **约束管理**：时序约束 + 领域知识约束
+- **可视化**：NetworkX + Matplotlib
+
+#### 核心流程
+```mermaid
+graph LR
+    A[原始数据] --> B[时序对构建]
+    B --> C[特征编码]
+    C --> D[PC算法]
+    D --> E[约束应用]
+    E --> F[因果图可视化]
+```
+
+#### 使用方法
+```bash
+# 运行因果发现
+python experiments/simple_causal_discovery.py
+```
+
+#### 数据处理流程
+1. **时序对构建**：724对相邻就诊记录（139名患者）
+2. **特征筛选**：
+   - 症状：41 → 20（频率≥10%）
+   - 药物：272 → 40（频率≥10%）
+   - 诊断：324 → 28（频率≥10%）
+3. **因果发现**：107个节点，180条因果边
+
+#### 发现的因果关系
+
+##### 药物→症状（11条）
+| 药物 | 目标症状 | 说明 |
+|------|----------|------|
+| 威灵仙 | 颈痛、腹泻 | 通络止痛 |
+| 人参片 | 头晕 | 大补元气 |
+| 石菖蒲 | 精神 | 开窍醒神 |
+| 辛夷 | 流涕 | 通鼻窍 |
+| 陈皮 | 鼻塞 | 理气健脾 |
+
+##### 症状持续性（11条）
+- 畏寒、头痛、头晕、咽干、咳痰、咳嗽、鼻塞、耳鸣、听力下降、耳胀闷、反酸、精神
+
+#### 输出文件
+```
+outputs/
+├── data/
+│   ├── step1_processed_data.csv      # 处理后数据
+│   ├── step2_pairs_data.csv          # 时序对数据
+│   ├── step3_encoded_data.csv        # 编码数据
+│   └── step4_data_matrix.csv         # 最终数据矩阵
+├── graphs/
+│   ├── causal_dag.pkl                # NetworkX图对象
+│   ├── causal_edges.json             # 边列表
+│   └── causal_dag.png                # 可视化图
+└── reports/
+    └── simple_causal_discovery_report.md
+```
+
+---
+
+## 🚀 下一步开发计划
+
+### 阶段3：因果推断（开发中）⚙️
+
+**目标**：基于因果图，量化药物对症状的因果效应
+
+#### 技术方案
+- **方法**：因果效应估计（Causal Effect Estimation）
+- **核心技术**：
+  - 倾向性评分匹配（PSM）
+  - 平均处理效应（ATE）估计
+  - 双稳健估计（Doubly Robust Estimation）
+
+#### 实现计划
+```python
+# 伪代码示例
+for treatment_outcome in causal_edges:
+    if treatment_outcome.type == "药物→症状":
+        # 1. 识别混杂因素
+        confounders = identify_confounders(
+            treatment=treatment_outcome.source,
+            outcome=treatment_outcome.target,
+            causal_graph=causal_dag
+        )
+
+        # 2. 倾向性评分匹配
+        matched_data = propensity_score_matching(
+            data=data_matrix,
+            treatment=treatment_outcome.source,
+            confounders=confounders
+        )
+
+        # 3. 估计ATE
+        ate_result = estimate_ate(
+            data=matched_data,
+            treatment=treatment_outcome.source,
+            outcome=treatment_outcome.target
+        )
+
+        # 4. 生成报告
+        print(f"{treatment_outcome.source} → {treatment_outcome.target}")
+        print(f"  ATE: {ate_result.ate} (95% CI: {ate_result.ci})")
+        print(f"  p值: {ate_result.p_value}")
+```
+
+#### 预期输出
+- 每条药物→症状因果边的效应大小
+- 置信区间和显著性检验
+- 带权重的因果图（边上标注ATE值）
+
+---
+
+## 📁 项目结构
 
 ```
 Causality-NPC/
-├── config/                    # 配置文件
-│   ├── base.yaml              # 基础配置
-│   ├── preprocessing.yaml     # 预处理配置
-│   ├── causal_inference.yaml  # 因果推断配置
-│   └── causal_discovery.yaml  # 因果发现配置
+├── Data/
+│   └── raw/
+│       ├── npc_full.csv                  # 原始数据
+│       └── npc_full_with_symptoms.csv    # 提取症状后
 │
-├── src/                       # 源代码
-│   ├── data/                  # 数据处理模块
-│   │   ├── loader.py          # 数据加载
-│   │   ├── preprocessing.py   # 数据清洗
-│   │   └── time_alignment.py  # 时间对齐
-│   │
-│   ├── features/              # 特征工程模块
-│   │   ├── symptom_extractor.py   # 症状提取
-│   │   ├── medicine_mapper.py     # 药物映射
-│   │   └── syndrome_encoder.py    # 证型编码
-│   │
-│   ├── causal_inference/      # 目标一：因果推断
-│   │   ├── propensity_score.py    # 倾向性评分
-│   │   ├── matching.py            # 患者匹配
-│   │   ├── ate_estimator.py       # ATE估计
-│   │   └── validator.py           # 平衡性验证
-│   │
-│   ├── causal_discovery/      # 目标二：因果发现
-│   │   ├── algorithms.py          # PC/FCI算法
-│   │   ├── bootstrap.py           # 稳定性选择
-│   │   ├── constraints.py         # 约束管理
-│   │   └── graph_utils.py         # 图工具
-│   │
-│   ├── visualization/         # 可视化模块
-│   │   ├── dag_plotter.py         # DAG绘制
-│   │   └── report_generator.py    # 报告生成
-│   │
-│   └── utils/                 # 工具函数
-│       ├── metrics.py             # 评估指标
-│       ├── stat_tests.py          # 统计检验
-│       └── config.py              # 配置管理
+├── src/
+│   ├── data/
+│   │   ├── simple_loader.py              # 数据加载
+│   │   ├── simple_pair_builder.py        # 时序对构建
+│   │   └── simplified_extraction.py      # 症状抽取
+│   ├── features/
+│   │   └── simple_encoder.py             # 特征编码
+│   ├── causal_discovery/
+│   │   └── simple_constraints.py         # 因果约束
+│   └── visualization/
+│       └── simple_plotter.py             # 可视化
 │
-├── experiments/               # 实验脚本
-│   ├── 01_data_exploration.ipynb   # 数据探索
-│   ├── 02_preprocessing_pipeline.py # 预处理流程
-│   ├── 03_propensity_score.ipynb   # 倾向性评分实验
-│   ├── 04_causal_inference.py      # 因果推断实验
-│   ├── 05_causal_discovery.py      # 因果发现实验
-│   └── 06_stability_analysis.py    # 稳定性分析
+├── experiments/
+│   └── simple_causal_discovery.py       # 因果发现主脚本
 │
-├── outputs/                   # 输出结果
-│   ├── figures/               # 图表
-│   ├── reports/               # 分析报告
-│   └── graphs/                # 因果图
+├── examples/
+│   └── extract_npc_full.py              # 症状抽取脚本
 │
-├── data/                      # 数据目录
-│   ├── raw/                   # 原始数据
-│   ├── processed/             # 预处理后数据
-│   ├── features/              # 特征文件
-│   └── models/                # 训练好的模型
-│
-├── docs/                      # 文档
-│   ├── plan.md                # 项目计划
-│   └── knowledge_base/        # 领域知识文档
-│       ├── tcm_symptoms.md    # 中医症状词典
-│       ├── herbs_mapping.md   # 中药功效映射
-│       └── expert_rules.md    # 专家规则
-│
-├── tests/                     # 单元测试
-│
-└── requirements.txt           # 依赖包
+└── outputs/
+    ├── data/                             # 处理后数据
+    ├── graphs/                           # 因果图
+    └── reports/                          # 分析报告
 ```
 
 ---
 
-## 快速开始
+## 🔧 环境配置
 
-### 1. 环境安装
-
+### Python环境
 ```bash
-# 克隆项目
-git clone https://github.com/your-repo/Causality-NPC.git
-cd Causality-NPC
-
-# 创建虚拟环境
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# 或
-venv\Scripts\activate  # Windows
+# 创建环境
+conda create -n causalnex_env python=3.8
+conda activate causalnex_env
 
 # 安装依赖
 pip install -r requirements.txt
 ```
 
-### 2. 准备数据
-
-将原始数据放入 `data/raw/` 目录，确保数据包含以下字段：
-- `patient_id`: 患者ID
-- `time`: 就诊时间
-- `chief_complaint`: 主诉文本
-- `chinese_medicines`: 中药处方
-- `chinese_diagnosis`: 中医证型
-- `western_medicines`: 西医治疗（可选）
-
-### 3. 运行实验
-
-#### 目标一：因果推断（验证性）
-
-```python
-from src import DataLoader, SymptomExtractor, MedicineMapper
-from src.causal_inference import PropensityScoreMatcher, ATEEstimator
-
-# 加载数据
-loader = DataLoader()
-df = loader.load("data/raw/npc_data.csv")
-
-# 特征提取
-symptom_extractor = SymptomExtractor()
-medicine_mapper = MedicineMapper()
-df = symptom_extractor.transform(df, text_column="chief_complaint")
-df = medicine_mapper.transform(df, medicine_column="chinese_medicines")
-
-# 定义研究假设
-treatment = "M_补气药"  # 处理变量
-outcome = "S_乏力_t1"   # 结果变量（t+1时刻）
-confounders = ["age", "gender", "D_气虚"]  # 混杂因素
-
-# 倾向性评分匹配
-ps_matcher = PropensityScoreMatcher()
-df_matched = ps_matcher.fit_transform(df, treatment, confounders)
-
-# 匹配患者
-from src.causal_inference import match_patients, assess_match_quality
-df_matched, match_info = match_patients(df_matched, treatment)
-balance_df = assess_match_quality(df_matched, treatment, confounders)
-
-# 估计ATE
-ate_estimator = ATEEstimator()
-results = ate_estimator.estimate(df_matched, treatment, outcome)
-
-# 生成报告
-from src.visualization import ReportGenerator
-report_gen = ReportGenerator()
-report_gen.generate_causal_inference_report(
-    results, balance_df, "outputs/reports/causal_inference_report.md"
-)
-```
-
-#### 目标二：因果发现（探索性）
-
-```python
-from src import CausalDiscovery, StabilitySelector
-from src.causal_discovery import ConstraintManager
-
-# 准备时序数据
-# 确保变量名包含时间标签（如 "S_乏力_t", "M_补气药_t1"）
-
-# 运行因果发现
-cd = CausalDiscovery()
-graph = cd.discover(
-    data=df_time,
-    algorithm="pc",
-    alpha=0.05,
-    independence_test="fisherz"
-)
-
-# 稳定性选择
-stability_selector = StabilitySelector(n_bootstrap=1000)
-stable_edges = stability_selector.select(
-    df_time, cd.discover, {"alpha": 0.05}
-)
-
-# 应用约束
-constraint_manager = ConstraintManager()
-graph_constrained = constraint_manager.apply_constraints(graph, df_time.columns)
+### 必需依赖
+```bash
+# 核心依赖
+numpy>=1.21.0
+pandas>=1.3.0
+scikit-learn>=1.0.0
+networkx>=2.6.0
+causal-learn>=0.1.3
 
 # 可视化
-cd.plot_graph(layout="hierarchical", save_path="outputs/graphs/causal_dag.png")
+matplotlib>=3.5.0
+
+# LLM（症状抽取）
+langchain-openai>=0.1.0
+langchain-core>=0.1.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+```
+
+### Azure OpenAI配置
+创建 `.env` 文件：
+```bash
+AZURE_OPENAI_API_KEY=your_api_key
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_API_VERSION=2024-02-15-preview
+AZURE_OPENAI_DEPLOYMENT_NAME=your_deployment_name
 ```
 
 ---
 
-## 核心功能
+## 📊 数据说明
 
-### 数据处理模块
-- ✅ 数据加载与验证
-- ✅ 时间轴对齐
-- ✅ 症状文本提取（支持规则+LLM）
-- ✅ 药物功效映射
-- ✅ 证型编码
+### 原始数据字段
+| 字段 | 说明 | 示例 |
+|------|------|------|
+| patient_id | 患者ID | 001 |
+| time | 就诊时间 | 2023-10-02 |
+| gender | 性别 | 女 |
+| age | 年龄 | 58 |
+| chief_complaint | 主诉文本 | "精神疲倦乏力，咽干严重" |
+| chinese_diagnosis | 中医诊断 | "痰瘀互结证" |
+| western_diagnosis | 西医诊断 | "高血压" |
+| chinese_medicines | 中药处方 | "黄芪 党参 甘草" |
 
-### 因果推断模块（目标一）
-- ✅ 倾向性评分估计（逻辑回归、随机森林、梯度提升）
-- ✅ 患者匹配（最近邻、最优匹配）
-- ✅ 平衡性检验（标准化差异、t检验）
-- ✅ ATE估计（均值差、回归调整、双鲁棒）
-- ✅ 敏感性分析（Rosenbaum界、E-value）
-
-### 因果发现模块（目标二）
-- ✅ PC算法
-- ✅ FCI算法（隐变量）
-- ✅ Bootstrap稳定性选择
-- ✅ 时序约束
-- ✅ 领域知识约束
-- ✅ 路径提取与可视化
-
-### 可视化模块
-- ✅ DAG绘制（支持分层布局）
-- ✅ 平衡性图
-- ✅ 边频率分布图
-- ✅ Markdown报告生成
+### 时序对数据结构
+```
+患者A: 第1次就诊(t) → 第2次就诊(t+1)
+      │                      │
+   症状_t                症状_t1
+   诊断_t                诊断_t1
+   药物_t                (不使用)
+```
 
 ---
 
-## 配置说明
+## 📈 核心发现
 
-所有配置文件位于 `config/` 目录：
+### 因果网络统计
+- **节点数**：107个
+- **边数**：180条
+- **网络密度**：1.6%
 
-- **base.yaml**: 项目全局配置（路径、随机种子、日志等）
-- **preprocessing.yaml**: 数据预处理配置（时间窗口、症状分级等）
-- **causal_inference.yaml**: 因果推断配置（匹配方法、ATE估计方法等）
-- **causal_discovery.yaml**: 因果发现配置（算法选择、约束定义等）
+### 关键药物疗效证据
+1. **威灵仙 → 颈痛**：符合中医药理论（通络止痛）
+2. **人参片 → 头晕**：符合"气虚则头晕"理论
+3. **石菖蒲 → 精神**：符合开窍醒神功效
 
-可通过修改YAML文件调整参数，无需修改代码。
-
----
-
-## 依赖说明
-
-### 核心依赖
-- **numpy, pandas**: 数据处理
-- **scikit-learn**: 机器学习
-- **causal-learn**: PC/FCI算法实现
-
-### 可选依赖
-- **dowhy**: 因果推断验证
-- **openai/anthropic**: LLM文本提取
+### 症状持续性模式
+12种症状具有强持续性，构成鼻咽癌患者的"核心症状群"
 
 ---
 
-## 常见问题
+## 🎓 技术亮点
 
-### Q1: 如何添加新的症状词典？
+1. **LLM驱动的症状提取**
+   - 使用GPT-4从自由文本中提取结构化症状
+   - 症状名称标准化（41种标准症状）
+   - 严重程度自动分级（0/1/2）
 
-编辑 `docs/knowledge_base/tcm_symptoms.md`，代码会自动加载。
+2. **时序因果发现**
+   - 基于PC算法的自动因果发现
+   - 时序约束（未来不能影响过去）
+   - 领域知识约束（医学合理性）
 
-### Q2: Bootstrap太慢怎么办？
-
-在 `config/base.yaml` 中设置 `n_bootstrap: 100`（快速测试）或使用并行计算。
-
-### Q3: 如何解读因果图？
-
-- 实线箭头：有向因果关系
-- 箭头方向：时间流向（过去 → 未来）
-- 边的粗细：置信度（通过Bootstrap频率计算）
-
----
-
-## 贡献指南
-
-欢迎贡献代码！请遵循以下步骤：
-
-1. Fork项目
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启Pull Request
-
----
-
-## 许可证
-
-本项目采用 MIT 许可证。详见 [LICENSE](LICENSE) 文件。
-
----
-
-## 联系方式
-
-如有问题或建议，请通过以下方式联系：
-
-- 提交 Issue
-- 发送邮件至：your.email@example.com
-
----
-
-**最后更新**: 2026-01-28
+3. **端到端流程**
+   - 从原始文本到因果图的完整流程
+   - 支持断点续传（症状抽取）
+   - 自动化报告生成

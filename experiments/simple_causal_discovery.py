@@ -263,6 +263,32 @@ def run_causal_discovery():
     constraint_manager.set_variable_groups(variable_groups)
     G_constrained = constraint_manager.apply_constraints(G, verbose=True)
 
+    # ========== 步骤6.5: 保存图结构 ==========
+    print("\n" + "=" * 60)
+    print("步骤6.5: 保存图结构")
+    print("=" * 60)
+
+    try:
+        import pickle
+        import json
+
+        # 保存图结构为pickle格式（NetworkX Graph对象）
+        dag_path = os.path.join(CONFIG['graphs_dir'], 'causal_dag.pkl')
+        with open(dag_path, 'wb') as f:
+            pickle.dump(G_constrained, f)
+        print(f"图结构已保存: {dag_path}")
+
+        # 保存边列表为JSON格式（便于人工检查）
+        edge_list = [(u, v) for u, v in G_constrained.edges()]
+        edge_path = os.path.join(CONFIG['graphs_dir'], 'causal_edges.json')
+        with open(edge_path, 'w', encoding='utf-8') as f:
+            json.dump(edge_list, f, ensure_ascii=False, indent=2)
+        print(f"边列表已保存: {edge_path}")
+        print(f"边总数: {len(edge_list)}")
+
+    except Exception as e:
+        print(f"保存图结构时出错: {e}")
+
     # ========== 步骤7: 可视化 ==========
     print("\n" + "=" * 60)
     print("步骤7: 可视化因果图")
