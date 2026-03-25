@@ -1,0 +1,598 @@
+"""
+推荐系统评价器
+Recommendation System Evaluator
+
+功能：
+1. 从 processed_data.csv 和 processed_medicines.csv 加载真实数据
+2. 对多个患者执行推荐
+3. 计算准确率、召回率、F1等指标
+4. 支持阈值调整
+5. 生成详细报告
+"""
+
+import pandas as pd
+from pathlib import Path
+from typing import Dict, List, Tuple
+from .recommender import CausalRecommender
+
+
+class RecommendationEvaluator:
+    """
+    推荐系统评价器
+
+    计算推荐系统的分类评价指标（准确率、精确率、召回率、F1分数等）
+    支持从分离的患者特征文件和用药文件加载数据
+    """
+
+    def __init__(
+        self,
+        recommender: CausalRecommender,
+        patient_data_path: str = "Data/processed/processed_data.csv",
+        medicine_data_path: str = "Data/processed/processed_medicines.csv",
+        threshold_positive: float = 0.05,
+        threshold_negative: float = -0.05
+    ):
+        """
+        初始化评价器
+
+        Parameters
+        ----------
+        recommender : CausalRecommender
+            推荐器实例
+        patient_data_path : str
+            患者特征数据CSV文件路径
+        medicine_data_path : str
+            真实用药数据CSV文件路径
+        threshold_positive : float
+            推荐阈值（正向）
+        threshold_negative : float
+            警告阈值（负向）
+        """
+        self.recommender = recommender
+        self.patient_data_path = Path(patient_data_path)
+        self.medicine_data_path = Path(medicine_data_path)
+        self.threshold_positive = threshold_positive
+        self.threshold_negative = threshold_negative
+
+        # 加载数据
+        self._load_data()
+
+        # 过滤药品，只保留图中的
+        self._filter_medicines()
+
+    def _load_data(self):
+        """加载患者数据和真实用药数据"""
+        print(f"[INFO] 正在加载患者数据: {self.patient_data_path}")
+        self.df_patients = pd.read_csv(self.patient_data_path)
+        print(f"[OK] 加载了 {len(self.df_patients)} 条患者记录")
+
+        print(f"[INFO] 正在加载用药数据: {self.medicine_data_path}")
+        self.df_medicines = pd.read_csv(self.medicine_data_path)
+        print(f"[OK] 加载了 {len(self.df_medicines)} 条用药记录")
+
+        # 验证两个文件的行数一致
+        assert len(self.df_patients) == len(self.df_medicines), \
+            f"患者数据({len(self.df_patients)}行)和用药数据({len(self.df_medicines)}行)行数不一致"
+
+    def _filter_medicines(self):
+        """过滤药品列，只保留图中存在的药品"""
+        # 图中的药品节点（格式：med_药品名_t）
+        graph_meds = set(self.recommender.med_nodes)
+
+        # 从图中提取基础药品名（去掉 med_ 前缀和 _t 后缀）
+        graph_med_names = set()
+        for med in graph_meds:
+            if med.startswith('med_') and med.endswith('_t'):
+                # 提取基础名称：med_茯神_t → 茯神
+                base_name = med[4:-2]  # 去掉 'med_' 和 '_t'
+                graph_med_names.add(base_name)
+
+        # 获取真实数据中的所有列名
+        all_columns = set(self.df_medicines.columns)
+
+        # 找出共同的药品（基础名称匹配）
+        common_med_names = sorted(graph_med_names & all_columns)
+
+        # 转换为图中的格式
+        self.common_meds = sorted([f"med_{name}_t" for name in common_med_names])
+
+        # 保存原始列名（用于从df_medicines读取）
+        self.common_meds_original = common_med_names
+
+        print(f"[INFO] 图中药品节点数: {len(graph_meds)}")
+        print(f"[INFO] 真实数据药品列数: {len(all_columns)}")
+        print(f"[INFO] 匹配的药品名称数: {len(common_med_names)}")
+        print(f"[OK] 共同药品数: {len(self.common_meds)}")
+
+        if len(self.common_meds) == 0:
+            print("[WARNING] 没有共同的药品！请检查数据格式。")
+            print(f"  图中药品基础名示例: {list(graph_med_names)[:10]}")
+            print(f"  数据列名示例: {list(all_columns)[:10]}")
+
+        # 显示一些匹配的药品示例
+        if len(self.common_meds) > 0:
+            print(f"[INFO] 匹配的药品示例: {common_med_names[:min(10, len(common_med_names))]}")
+
+    def evaluate_patient(self, patient_idx: int) -> Dict:
+        """
+        评价单个患者
+
+        Parameters
+        ----------
+        patient_idx : int
+            患者数据索引
+
+        Returns
+        -------
+        dict
+            评价结果，包含：
+            - patient_idx: 患者索引
+            - patient_info: 患者信息
+            - metrics: 评价指标
+            - recommendation: 推荐结果
+        """
+        # 获取患者数据
+        patient_row = self.df_patients.iloc[patient_idx]
+        medicine_row = self.df_medicines.iloc[patient_idx]
+
+        # 构建患者信息（用于推荐）
+        patient_info = self._construct_patient_info(patient_row)
+
+        # 执行推荐
+        result = self.recommender.recommend(
+            patient_info=patient_info,
+            threshold_positive=self.threshold_positive,
+            threshold_negative=self.threshold_negative
+        )
+
+        # 计算指标
+        metrics = self._calculate_metrics(
+            result['all_scores'],
+            medicine_row,
+            self.common_meds,
+            self.common_meds_original
+        )
+
+        return {
+            'patient_idx': patient_idx,
+            'patient_info': patient_info,
+            'metrics': metrics,
+            'recommendation': result
+        }
+
+    def evaluate_batch(
+        self,
+        patient_indices: List[int] = None,
+        max_patients: int = None
+    ) -> Dict:
+        """
+        批量评价多个患者
+
+        Parameters
+        ----------
+        patient_indices : list, optional
+            患者索引列表，如果为None则评价所有患者
+        max_patients : int, optional
+            最大评价患者数
+
+        Returns
+        -------
+        dict
+            批量评价结果，包含：
+            - threshold_positive: 正向阈值
+            - threshold_negative: 负向阈值
+            - num_patients: 评价患者数
+            - common_meds: 共同药品列表
+            - patient_results: 每个患者的评价结果
+            - aggregated_metrics: 汇总指标
+        """
+        if patient_indices is None:
+            patient_indices = range(len(self.df_patients))
+
+        if max_patients is not None:
+            patient_indices = list(patient_indices)[:max_patients]
+
+        print(f"\n[INFO] 正在评价 {len(patient_indices)} 个患者...")
+
+        results = []
+        failed_count = 0
+
+        for idx in patient_indices:
+            try:
+                result = self.evaluate_patient(idx)
+                results.append(result)
+
+                # 进度提示（每50个患者）
+                if len(results) % 50 == 0:
+                    print(f"  进度: {len(results)}/{len(patient_indices)}")
+
+            except Exception as e:
+                failed_count += 1
+                print(f"[ERROR] 评价患者 {idx} 失败: {e}")
+                continue
+
+        print(f"[OK] 成功评价 {len(results)} 个患者，失败 {failed_count} 个")
+
+        # 汇总指标
+        aggregated_metrics = self._aggregate_metrics(results)
+
+        return {
+            'threshold_positive': self.threshold_positive,
+            'threshold_negative': self.threshold_negative,
+            'num_patients': len(results),
+            'num_failed': failed_count,
+            'common_meds': self.common_meds,
+            'patient_results': results,
+            'aggregated_metrics': aggregated_metrics
+        }
+
+    def _construct_patient_info(self, patient_row: pd.Series) -> Dict:
+        """
+        从患者数据行构建患者信息
+
+        注意：字段名称需要转换以匹配推荐器期望的格式
+
+        Parameters
+        ----------
+        patient_row : pd.Series
+            患者数据行（来自df_patients）
+
+        Returns
+        -------
+        dict
+            患者信息字典，包含：
+            - gender: 性别
+            - age: 年龄
+            - 症状: 症状列表（值为非零的症状）
+            - 诊断: 诊断列表（值为非零的诊断）
+        """
+        patient_info = {}
+
+        # 性别（直接使用gender列）
+        if 'gender' in patient_row.index:
+            gender = patient_row['gender']
+            if pd.notna(gender):
+                patient_info['gender'] = '女' if str(gender) == '女' else '男'
+
+        # 年龄（直接使用）
+        if 'age' in patient_row.index and pd.notna(patient_row['age']):
+            patient_info['age'] = int(patient_row['age'])
+
+        # 遍历所有列，识别症状和诊断
+        for col in patient_row.index:
+            # 跳过已知的前缀列和特殊列
+            if col.startswith(('patient_id', 'checkup_id', 'time', 'gender', 'age')):
+                continue
+
+            value = patient_row[col]
+            if pd.isna(value) or value == 0:
+                continue
+
+            # 判断是否为症状列（不包含'证'等诊断关键词）
+            if '证' not in col and not col.startswith('diagnosis_') and not col.startswith('med_'):
+                # 检查是否在图中存在（添加_t后缀）
+                node_name = f"{col}_t"
+                if node_name in self.recommender.all_nodes:
+                    patient_info[col] = float(value)
+
+            # 判断是否为诊断列（包含'证'）
+            elif '证' in col:
+                node_name = f"diagnosis_{col}_t"
+                if node_name in self.recommender.all_nodes:
+                    patient_info[col] = float(value)
+
+        return patient_info
+
+    def _calculate_metrics(
+        self,
+        pred_scores: Dict[str, float],
+        medicine_row: pd.Series,
+        medicines: List[str],
+        medicines_original: List[str]
+    ) -> Dict:
+        """
+        计算单个患者的评价指标
+
+        Parameters
+        ----------
+        pred_scores : dict
+            预测分数 {med_药物_t: score}
+        medicine_row : pd.Series
+            真实用药数据行（来自df_medicines）
+        medicines : list
+            图中的药品列表（格式：med_药品_t）
+        medicines_original : list
+            原始药品列名（格式：med_药品名）
+
+        Returns
+        -------
+        dict
+            评价指标，包含：
+            - tp, fp, tn, fn: 混淆矩阵元素
+            - accuracy: 准确率
+            - precision: 精确率
+            - recall: 召回率
+            - f1: F1分数
+            - mcc: MCC系数
+            - num_recommended: 推荐药物数
+            - num_true_medications: 真实用药数
+        """
+        # 构建预测标签（二值化）
+        y_pred = []
+        y_true = []
+
+        for med_graph, med_orig in zip(medicines, medicines_original):
+            # 预测：1=推荐，0=不推荐或中性
+            pred_label = 1 if pred_scores.get(med_graph, 0) >= self.threshold_positive else 0
+            y_pred.append(pred_label)
+
+            # 真实：从原始列名读取
+            true_label = int(medicine_row.get(med_orig, 0))
+            y_true.append(true_label)
+
+        # 计算混淆矩阵
+        tp = sum(1 for p, t in zip(y_pred, y_true) if p == 1 and t == 1)
+        fp = sum(1 for p, t in zip(y_pred, y_true) if p == 1 and t == 0)
+        tn = sum(1 for p, t in zip(y_pred, y_true) if p == 0 and t == 0)
+        fn = sum(1 for p, t in zip(y_pred, y_true) if p == 0 and t == 1)
+
+        # 计算指标
+        total = tp + tn + fp + fn
+        accuracy = (tp + tn) / total if total > 0 else 0
+
+        precision_denom = tp + fp
+        precision = tp / precision_denom if precision_denom > 0 else 0
+
+        recall_denom = tp + fn
+        recall = tp / recall_denom if recall_denom > 0 else 0
+
+        f1_denom = precision + recall
+        f1 = 2 * precision * recall / f1_denom if f1_denom > 0 else 0
+
+        # 计算MCC (Matthews Correlation Coefficient)
+        mcc_numerator = tp * tn - fp * fn
+        mcc_denominator = ((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)) ** 0.5
+        mcc = mcc_numerator / mcc_denominator if mcc_denominator > 0 else 0
+
+        return {
+            'tp': tp,
+            'fp': fp,
+            'tn': tn,
+            'fn': fn,
+            'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'mcc': mcc,
+            'num_recommended': sum(y_pred),
+            'num_true_medications': sum(y_true)
+        }
+
+    def _aggregate_metrics(self, results: List[Dict]) -> Dict:
+        """
+        汇总多个患者的评价指标
+
+        Parameters
+        ----------
+        results : list
+            单个患者评价结果列表
+
+        Returns
+        -------
+        dict
+            汇总指标，包含：
+            - micro: 微观平均（累积混淆矩阵）
+            - macro: 宏观平均（患者级别平均）
+        """
+        if not results:
+            return {
+                'micro': {
+                    'accuracy': 0,
+                    'precision': 0,
+                    'recall': 0,
+                    'f1': 0,
+                    'mcc': 0,
+                    'tp': 0,
+                    'fp': 0,
+                    'tn': 0,
+                    'fn': 0
+                },
+                'macro': {
+                    'accuracy': 0,
+                    'precision': 0,
+                    'recall': 0,
+                    'f1': 0,
+                    'mcc': 0
+                }
+            }
+
+        # 累积混淆矩阵
+        total_tp = sum(r['metrics']['tp'] for r in results)
+        total_fp = sum(r['metrics']['fp'] for r in results)
+        total_tn = sum(r['metrics']['tn'] for r in results)
+        total_fn = sum(r['metrics']['fn'] for r in results)
+
+        # 计算汇总指标（微观平均）
+        total = total_tp + total_tn + total_fp + total_fn
+        total_accuracy = (total_tp + total_tn) / total if total > 0 else 0
+
+        precision_denom = total_tp + total_fp
+        total_precision = total_tp / precision_denom if precision_denom > 0 else 0
+
+        recall_denom = total_tp + total_fn
+        total_recall = total_tp / recall_denom if recall_denom > 0 else 0
+
+        f1_denom = total_precision + total_recall
+        total_f1 = 2 * total_precision * total_recall / f1_denom if f1_denom > 0 else 0
+
+        # MCC计算（微观平均）
+        mcc_numerator = total_tp * total_tn - total_fp * total_fn
+        mcc_denominator = ((total_tp + total_fp) * (total_tp + total_fn) *
+                           (total_tn + total_fp) * (total_tn + total_fn)) ** 0.5
+        total_mcc = mcc_numerator / mcc_denominator if mcc_denominator > 0 else 0
+
+        # 患者级别的平均指标（宏观平均）
+        avg_accuracy = sum(r['metrics']['accuracy'] for r in results) / len(results)
+        avg_precision = sum(r['metrics']['precision'] for r in results) / len(results)
+        avg_recall = sum(r['metrics']['recall'] for r in results) / len(results)
+        avg_f1 = sum(r['metrics']['f1'] for r in results) / len(results)
+        avg_mcc = sum(r['metrics']['mcc'] for r in results) / len(results)
+
+        return {
+            'micro': {
+                'accuracy': total_accuracy,
+                'precision': total_precision,
+                'recall': total_recall,
+                'f1': total_f1,
+                'mcc': total_mcc,
+                'tp': total_tp,
+                'fp': total_fp,
+                'tn': total_tn,
+                'fn': total_fn
+            },
+            'macro': {
+                'accuracy': avg_accuracy,
+                'precision': avg_precision,
+                'recall': avg_recall,
+                'f1': avg_f1,
+                'mcc': avg_mcc
+            }
+        }
+
+    def print_evaluation_report(self, eval_result: Dict):
+        """
+        打印评价报告
+
+        Parameters
+        ----------
+        eval_result : dict
+            评价结果
+        """
+        print("\n" + "="*80)
+        print("推荐系统评价报告")
+        print("Causal Recommendation System Evaluation Report")
+        print("="*80)
+
+        print(f"\n配置 (Configuration):")
+        print(f"  推荐阈值 (Positive Threshold): score >= {self.threshold_positive}")
+        print(f"  警告阈值 (Negative Threshold): score <= {self.threshold_negative}")
+        print(f"  评价患者数 (Patients): {eval_result['num_patients']}")
+        if eval_result.get('num_failed', 0) > 0:
+            print(f"  失败患者数 (Failed): {eval_result['num_failed']}")
+        print(f"  共同药品数 (Common Medicines): {len(eval_result['common_meds'])}")
+
+        print(f"\n{'='*80}")
+        print("微观平均 (Micro-Average)")
+        print("说明：累积所有患者的混淆矩阵后计算的指标")
+        print(f"{'='*80}")
+
+        metrics = eval_result['aggregated_metrics']['micro']
+        print(f"\n  准确率 (Accuracy):  {metrics['accuracy']:.4f}")
+        print(f"  精确率 (Precision):  {metrics['precision']:.4f}")
+        print(f"  召回率 (Recall):     {metrics['recall']:.4f}")
+        print(f"  F1分数 (F1-Score):   {metrics['f1']:.4f}")
+        print(f"  MCC系数:            {metrics['mcc']:.4f}")
+
+        print(f"\n  混淆矩阵 (Confusion Matrix):")
+        print(f"    预测\\实际    用药(1)    不用药(0)")
+        print(f"    推荐(1)      TP={metrics['tp']:>6}    FP={metrics['fp']:>6}")
+        print(f"    不推荐(0)    FN={metrics['fn']:>6}    TN={metrics['tn']:>6}")
+
+        print(f"\n{'='*80}")
+        print("宏观平均 (Macro-Average)")
+        print("说明：每个患者指标的平均值")
+        print(f"{'='*80}")
+
+        metrics = eval_result['aggregated_metrics']['macro']
+        print(f"\n  准确率 (Accuracy):  {metrics['accuracy']:.4f}")
+        print(f"  精确率 (Precision):  {metrics['precision']:.4f}")
+        print(f"  召回率 (Recall):     {metrics['recall']:.4f}")
+        print(f"  F1分数 (F1-Score):   {metrics['f1']:.4f}")
+        print(f"  MCC系数:            {metrics['mcc']:.4f}")
+
+        print("\n" + "="*80 + "\n")
+
+    def save_results(self, eval_result: Dict, output_path: str = None):
+        """
+        保存评价结果到JSON文件
+
+        Parameters
+        ----------
+        eval_result : dict
+            评价结果
+        output_path : str, optional
+            输出文件路径，如果为None则使用默认路径
+        """
+        import json
+
+        if output_path is None:
+            output_path = self.medicine_data_path.parent.parent / "causal_effects" / "evaluation_results.json"
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 转换为可序列化的格式
+        eval_result_serializable = {
+            'threshold_positive': eval_result['threshold_positive'],
+            'threshold_negative': eval_result['threshold_negative'],
+            'num_patients': eval_result['num_patients'],
+            'num_failed': eval_result.get('num_failed', 0),
+            'common_meds': eval_result['common_meds'],
+            'aggregated_metrics': eval_result['aggregated_metrics'],
+            # 注意：不保存详细的 patient_results 以避免文件过大
+            # 如需保存单个患者结果，请使用 save_detailed_results 方法
+        }
+
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(eval_result_serializable, f, ensure_ascii=False, indent=2)
+
+        print(f"[OK] 评价结果已保存到: {output_path}")
+
+    def save_detailed_results(self, eval_result: Dict, output_path: str = None):
+        """
+        保存详细评价结果（包含每个患者的详细数据）到JSON文件
+
+        Parameters
+        ----------
+        eval_result : dict
+            评价结果
+        output_path : str, optional
+            输出文件路径，如果为None则使用默认路径
+        """
+        import json
+
+        if output_path is None:
+            output_path = self.medicine_data_path.parent.parent / "causal_effects" / "evaluation_results_detailed.json"
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 转换患者结果为可序列化的格式
+        patient_results_serializable = []
+        for pr in eval_result['patient_results']:
+            patient_result = {
+                'patient_idx': pr['patient_idx'],
+                'patient_info': pr['patient_info'],
+                'metrics': pr['metrics'],
+                'recommendation': {
+                    'recommended': {k: float(v) for k, v in pr['recommendation']['recommended'].items()},
+                    'not_recommended': {k: float(v) for k, v in pr['recommendation']['not_recommended'].items()},
+                    'neutral': pr['recommendation']['neutral']
+                }
+            }
+            patient_results_serializable.append(patient_result)
+
+        eval_result_serializable = {
+            'threshold_positive': eval_result['threshold_positive'],
+            'threshold_negative': eval_result['threshold_negative'],
+            'num_patients': eval_result['num_patients'],
+            'num_failed': eval_result.get('num_failed', 0),
+            'common_meds': eval_result['common_meds'],
+            'aggregated_metrics': eval_result['aggregated_metrics'],
+            'patient_results': patient_results_serializable
+        }
+
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(eval_result_serializable, f, ensure_ascii=False, indent=2)
+
+        print(f"[OK] 详细评价结果已保存到: {output_path}")

@@ -1,0 +1,610 @@
+"""
+基于因果网络的药物推荐系统
+Causal Network-based Medicine Recommendation System
+"""
+
+import json
+import pandas as pd
+import networkx as nx
+from typing import Dict, List, Tuple, Optional
+from pathlib import Path
+from collections import defaultdict
+
+
+class CausalRecommender:
+    """
+    基于因果传播的药物推荐器
+
+    核心算法：
+    1. 将患者信息输入因果网络
+    2. 沿因果边线性传播激活值
+    3. 根据药物节点激活值进行推荐
+    """
+
+    def __init__(
+        self,
+        edges_path: str = "outputs/graphs/causal_edges.json",
+        effects_path: str = "outputs/causal_effects/estimated_effects_3.csv",
+        dag_path: str = "outputs/graphs/causal_dag.pkl",
+    ):
+        """
+        初始化推荐器
+
+        Parameters
+        ----------
+        edges_path : str
+            因果边JSON文件路径
+        effects_path : str
+            ATE估计结果CSV文件路径
+        dag_path : str
+            因果图PKL文件路径
+        """
+        self.edges_path = Path(edges_path)
+        self.effects_path = Path(effects_path)
+        self.dag_path = Path(dag_path)
+
+        # 加载数据
+        self._load_data()
+
+        # 初始化变量映射
+        self._init_variable_mapping()
+
+    def _load_data(self):
+        """加载因果图和ATE估计结果"""
+        # 加载因果边
+        with open(self.edges_path, 'r', encoding='utf-8') as f:
+            self.edges_list = json.load(f)
+
+        # 加载ATE估计结果
+        self.effects_df = pd.read_csv(self.effects_path)
+        # 创建快速查询字典：(source, target) -> ate
+        self.ate_dict = {
+            (row['source'], row['target']): row['ate']
+            for _, row in self.effects_df.iterrows()
+        }
+
+        # 尝试加载DAG
+        if self.dag_path.exists():
+            import pickle
+            with open(self.dag_path, 'rb') as f:
+                self.dag = pickle.load(f)
+        else:
+            # 如果没有DAG文件，从边列表创建
+            self.dag = nx.DiGraph()
+            self.dag.add_edges_from(self.edges_list)
+
+        # 获取所有节点
+        self.all_nodes = set(self.dag.nodes())
+
+        # 获取药物节点
+        self.med_nodes = sorted([n for n in self.all_nodes if n.startswith('med_')])
+
+        # 获取拓扑排序（用于传播）
+        try:
+            self.topo_order = list(nx.topological_sort(self.dag))
+        except nx.NetworkXError:
+            # 如果有环，使用简单的层级排序
+            self.topo_order = sorted(self.all_nodes)
+
+    def _extract_symptom_nodes(self) -> List[str]:
+        """
+        从因果图中提取症状节点
+
+        症状节点定义：
+        - 不以 'med_' 或 'diagnosis_' 开头
+        - 以 '_t' 或 '_t1' 结尾
+        - 不是人口统计学变量（如 'gender_encoded'）
+
+        Returns
+        -------
+        list
+            症状节点列表，如：['畏寒_t', '头痛_t1', '失眠_t']
+        """
+        excluded_prefixes = ('med_', 'diagnosis_')
+        excluded_nodes = {'gender_encoded'}
+
+        symptom_nodes = [
+            node for node in self.all_nodes
+            if not node.startswith(excluded_prefixes)
+            and (node.endswith('_t') or node.endswith('_t1'))
+            and node not in excluded_nodes
+        ]
+
+        return sorted(symptom_nodes)
+
+    def _extract_diagnosis_nodes(self) -> List[str]:
+        """
+        从因果图中提取诊断节点
+
+        诊断节点定义：
+        - 以 'diagnosis_' 开头
+        - 以 '_t' 或 '_t1' 结尾
+
+        Returns
+        -------
+        list
+            诊断节点列表，如：['diagnosis_贫血_t', 'diagnosis_放射后甲状腺功能减退_t1']
+        """
+        diagnosis_nodes = [
+            node for node in self.all_nodes
+            if node.startswith('diagnosis_')
+            and (node.endswith('_t') or node.endswith('_t1'))
+        ]
+
+        return sorted(diagnosis_nodes)
+
+    def _extract_base_name(self, node: str) -> str:
+        """
+        从节点名中提取基础名称（去除前缀和后缀）
+
+        Parameters
+        ----------
+        node : str
+            节点名，如：'畏寒_t', 'diagnosis_贫血_t1'
+
+        Returns
+        -------
+        str
+            基础名称，如：'畏寒', '贫血'
+
+        Examples
+        --------
+        >>> _extract_base_name('畏寒_t')
+        '畏寒'
+        >>> _extract_base_name('头痛_t1')
+        '头痛'
+        >>> _extract_base_name('diagnosis_贫血_t')
+        '贫血'
+        >>> _extract_base_name('diagnosis_放射后甲状腺功能减退_t1')
+        '放射后甲状腺功能减退'
+        """
+        # 处理 diagnosis_ 前缀
+        if node.startswith('diagnosis_'):
+            # 去除 'diagnosis_' 前缀
+            name = node[10:]  # len('diagnosis_') = 10
+        else:
+            # 症状节点，直接处理
+            name = node
+
+        # 去除 _t 或 _t1 后缀
+        if name.endswith('_t1'):
+            return name[:-3]
+        elif name.endswith('_t'):
+            return name[:-2]
+        else:
+            return name
+
+    def _is_diagnosis_key(self, key: str) -> bool:
+        """
+        判断输入键是否为诊断相关的键
+
+        Parameters
+        ----------
+        key : str
+            输入键，如：'贫血', 'diagnosis_贫血', '阴虚血瘀证'
+
+        Returns
+        -------
+        bool
+            是否为诊断键
+        """
+        # 已带 diagnosis_ 前缀
+        if key.startswith('diagnosis_'):
+            return True
+
+        # 中医证型（包含'证'）
+        if '证' in key:
+            return True
+
+        # 西医诊断关键词
+        diagnosis_keywords = [
+            '癌', '炎', '障', '聋', '减退', '颃颡岩',
+            '乳癌', '脂肪肝', '2型糖尿病', '慢性鼻窦炎',
+            '分泌性中耳炎', '睡眠障碍', '急性鼻窦炎',
+            '放射后甲状腺功能减退', '混合性耳聋'
+        ]
+
+        return any(kw in key for kw in diagnosis_keywords)
+
+    def _generate_diagnosis_candidates(self, key: str) -> List[str]:
+        """
+        为诊断键生成候选节点名列表
+
+        Parameters
+        ----------
+        key : str
+            输入键，如：'贫血', 'diagnosis_贫血'
+
+        Returns
+        -------
+        list
+            候选节点名列表，按优先级排序
+
+        Examples
+        --------
+        >>> _generate_diagnosis_candidates('贫血')
+        ['diagnosis_贫血_t', 'diagnosis_贫血_t1']
+        >>> _generate_diagnosis_candidates('diagnosis_贫血')
+        ['diagnosis_贫血_t', 'diagnosis_贫血_t1']
+        """
+        candidates = []
+
+        # 标准化基础名称
+        if key.startswith('diagnosis_'):
+            base_name = key[10:]
+        else:
+            base_name = key
+
+        # 生成候选（优先级：_t > _t1）
+        candidates.append(f'diagnosis_{base_name}_t')
+        candidates.append(f'diagnosis_{base_name}_t1')
+
+        return candidates
+
+    def _init_variable_mapping(self):
+        """
+        初始化变量名映射规则（动态提取）
+
+        改进：从因果图中动态提取症状和诊断，而不是硬编码
+        """
+        # 1. 动态提取节点
+        symptom_nodes = self._extract_symptom_nodes()
+        diagnosis_nodes = self._extract_diagnosis_nodes()
+
+        # 2. 提取基础名称
+        self.symptoms = sorted(set(
+            self._extract_base_name(node) for node in symptom_nodes
+        ))
+
+        self.diagnoses = sorted(set(
+            self._extract_base_name(node) for node in diagnosis_nodes
+        ))
+
+        # 3. 人口统计学变量（保持不变）
+        self.demographics = ['gender', 'age', 'gender_encoded']
+
+        # 4. 构建映射规则
+        self.mapping_rules = {}
+
+        # 4.1 人口统计变量映射
+        self.mapping_rules['gender'] = (
+            'gender_encoded',
+            lambda x: 1 if x == '女' else 0
+        )
+
+        # 4.2 症状映射规则
+        # 规则：症状名 -> 症名_t（优先）或 症名_t1
+        for sym in self.symptoms:
+            target_t = f'{sym}_t'
+            target_t1 = f'{sym}_t1'
+
+            if target_t in self.all_nodes:
+                self.mapping_rules[sym] = (target_t, lambda x: x)
+            elif target_t1 in self.all_nodes:
+                self.mapping_rules[sym] = (target_t1, lambda x: x)
+
+        # 4.3 诊断映射规则
+        # 规则：诊断名 -> diagnosis_诊断名_t（优先）或 diagnosis_诊断名_t1
+        for diag in self.diagnoses:
+            target_t = f'diagnosis_{diag}_t'
+            target_t1 = f'diagnosis_{diag}_t1'
+
+            # 优先使用 _t 节点
+            if target_t in self.all_nodes:
+                self.mapping_rules[diag] = (target_t, lambda x: x)
+            elif target_t1 in self.all_nodes:
+                self.mapping_rules[diag] = (target_t1, lambda x: x)
+
+    def map_patient_to_graph(self, patient_info: Dict) -> Dict:
+        """
+        将患者信息映射到因果图变量名
+
+        改进：支持动态映射，提供更详细的映射反馈
+
+        Parameters
+        ----------
+        patient_info : dict
+            原始患者信息
+
+        Returns
+        -------
+        dict
+            映射结果，包含：
+            - mapped_vars: 有效变量
+            - invalid_vars: 无效变量（映射后不在图中）
+            - unmapped_keys: 未映射的原始键
+        """
+        mapped = {}
+        valid_vars = {}
+        invalid_vars = []
+        unmapped_keys = []
+
+        for key, value in patient_info.items():
+            # 跳过 None 或 0 的值（可选）
+            if value is None or value == 0:
+                continue
+
+            # 1. 优先使用预定义的映射规则
+            if key in self.mapping_rules:
+                graph_var, transform = self.mapping_rules[key]
+                mapped_value = transform(value)
+                mapped[graph_var] = mapped_value
+
+            # 2. 动态尝试匹配诊断（未在 mapping_rules 中的）
+            elif self._is_diagnosis_key(key):
+                candidates = self._generate_diagnosis_candidates(key)
+                matched = False
+                for candidate in candidates:
+                    if candidate in self.all_nodes:
+                        mapped[candidate] = value
+                        matched = True
+                        break
+                if not matched:
+                    unmapped_keys.append((key, value))
+
+            # 3. 未知类型
+            else:
+                unmapped_keys.append((key, value))
+
+        # 验证映射后的变量是否在图中
+        for var, value in mapped.items():
+            if var in self.all_nodes:
+                valid_vars[var] = value
+            else:
+                invalid_vars.append(var)
+
+        return {
+            'mapped_vars': valid_vars,
+            'invalid_vars': invalid_vars,
+            'unmapped_keys': unmapped_keys
+        }
+
+    def propagate(
+        self,
+        patient_info: Dict,
+        max_iterations: int = 10
+    ) -> Dict[str, float]:
+        """
+        执行因果传播算法
+
+        Parameters
+        ----------
+        patient_info : dict
+            患者信息
+        max_iterations : int
+            最大传播层数
+
+        Returns
+        -------
+        dict
+            所有节点的激活值
+        """
+        # 映射变量
+        mapping_result = self.map_patient_to_graph(patient_info)
+        activation = {node: 0.0 for node in self.all_nodes}
+
+        # 设置初始激活值
+        for var, value in mapping_result['mapped_vars'].items():
+            activation[var] = float(value)
+
+        # 按拓扑顺序传播（只传播有限层，避免循环累积）
+        for node in self.topo_order:
+            # 跳过初始输入节点
+            if node in mapping_result['mapped_vars']:
+                continue
+
+            # 计算来自所有父节点的激活
+            parents = list(self.dag.predecessors(node))
+            if not parents:
+                continue
+
+            # 计算新的激活值（不是累加，而是更新）
+            new_value = 0.0
+            for parent in parents:
+                edge_key = (parent, node)
+                if edge_key in self.ate_dict:
+                    ate = self.ate_dict[edge_key]
+                    new_value += activation[parent] * ate
+
+            # 更新激活值（而不是累加）
+            activation[node] = new_value
+
+        return activation
+
+    def recommend(
+        self,
+        patient_info: Dict,
+        threshold_positive: float = 0.05,
+        threshold_negative: float = -0.05,
+        top_k: Optional[int] = None
+    ) -> Dict:
+        """
+        为患者推荐药物
+
+        Parameters
+        ----------
+        patient_info : dict
+            患者信息
+        threshold_positive : float
+            推荐阈值（正向）
+        threshold_negative : float
+            警告阈值（负向）
+        top_k : int, optional
+            返回前k个推荐药物
+
+        Returns
+        -------
+        dict
+            推荐结果
+        """
+        # 执行传播
+        activation = self.propagate(patient_info)
+
+        # 提取药物节点激活值
+        med_scores = {med: activation[med] for med in self.med_nodes}
+
+        # 分类
+        recommended = {
+            med: score for med, score in med_scores.items()
+            if score >= threshold_positive
+        }
+
+        not_recommended = {
+            med: score for med, score in med_scores.items()
+            if score <= threshold_negative
+        }
+
+        neutral = {
+            med: score for med, score in med_scores.items()
+            if threshold_negative < score < threshold_positive
+        }
+
+        # 排序
+        recommended = dict(sorted(recommended.items(), key=lambda x: -x[1]))
+        not_recommended = dict(sorted(not_recommended.items(), key=lambda x: x[1]))
+
+        # 限制返回数量
+        if top_k is not None:
+            recommended = dict(list(recommended.items())[:top_k])
+
+        # 生成因果路径解释
+        explanations = self._generate_explanations(
+            patient_info, activation, recommended, not_recommended
+        )
+
+        return {
+            'patient_info': patient_info,
+            'recommended': recommended,
+            'not_recommended': not_recommended,
+            'neutral': list(neutral.keys()),
+            'explanations': explanations,
+            'all_scores': med_scores
+        }
+
+    def _generate_explanations(
+        self,
+        patient_info: Dict,
+        activation: Dict,
+        recommended: Dict,
+        not_recommended: Dict
+    ) -> Dict[str, List[Dict]]:
+        """
+        生成推荐的因果路径解释
+
+        Returns
+        -------
+        dict
+            每个药物的因果路径解释
+        """
+        explanations = {}
+
+        # 合并需要解释的药物
+        all_meds = list(recommended.keys()) + list(not_recommended.keys())
+
+        for med in all_meds:
+            paths = []
+            score = activation[med]
+
+            # 找到所有从患者输入变量到该药物的路径
+            mapping_result = self.map_patient_to_graph(patient_info)
+            input_vars = mapping_result['mapped_vars']
+
+            # 对每个输入变量，找到传播路径
+            for input_var in input_vars.keys():
+                try:
+                    # 找到所有简单路径
+                    all_paths = nx.all_simple_paths(
+                        self.dag, input_var, med, cutoff=5
+                    )
+
+                    for path in all_paths:
+                        if len(path) < 2:
+                            continue
+
+                        # 计算路径的贡献
+                        contribution = 1.0
+                        for i in range(len(path) - 1):
+                            edge = (path[i], path[i+1])
+                            if edge in self.ate_dict:
+                                contribution *= self.ate_dict[edge]
+
+                        # 只记录贡献较大的路径
+                        if abs(contribution) > 0.001:
+                            path_info = {
+                                'path': path,
+                                'contribution': contribution,
+                                'edges': [
+                                    {
+                                        'source': path[i],
+                                        'target': path[i+1],
+                                        'ate': self.ate_dict.get(
+                                            (path[i], path[i+1]), 0
+                                        )
+                                    }
+                                    for i in range(len(path) - 1)
+                                    if (path[i], path[i+1]) in self.ate_dict
+                                ]
+                            }
+                            paths.append(path_info)
+
+                except (nx.NetworkXNoPath, nx.NodeNotFound):
+                    continue
+
+            # 按贡献排序
+            paths.sort(key=lambda x: abs(x['contribution']), reverse=True)
+
+            if paths:
+                explanations[med] = paths[:5]  # 最多返回5条路径
+
+        return explanations
+
+    def print_recommendation(self, result: Dict):
+        """
+        打印推荐结果
+
+        Parameters
+        ----------
+        result : dict
+            recommend()方法的返回结果
+        """
+        print("=" * 80)
+        print("基于因果网络的药物推荐结果")
+        print("=" * 80)
+        print(f"\n患者信息：")
+        for key, value in result['patient_info'].items():
+            print(f"  {key}: {value}")
+
+        print(f"\n{'='*80}")
+        print(f"推荐药物（共 {len(result['recommended'])} 味）")
+        print(f"{'='*80}")
+
+        for med, score in result['recommended'].items():
+            print(f"\n{med}")
+            print(f"  得分: {score:.4f}")
+            if med in result['explanations']:
+                print(f"  推荐理由:")
+                for i, path_info in enumerate(result['explanations'][med], 1):
+                    print(f"    路径{i}: {' → '.join(path_info['path'])}")
+                    print(f"      贡献: {path_info['contribution']:.4f}")
+
+        if result['not_recommended']:
+            print(f"\n{'='*80}")
+            print(f"不推荐药物（共 {len(result['not_recommended'])} 味）")
+            print(f"{'='*80}")
+
+            for med, score in result['not_recommended'].items():
+                print(f"\n{med}")
+                print(f"  得分: {score:.4f}")
+                if med in result['explanations']:
+                    print(f"  警告理由:")
+                    for i, path_info in enumerate(result['explanations'][med], 1):
+                        print(f"    路径{i}: {' → '.join(path_info['path'])}")
+                        print(f"      贡献: {path_info['contribution']:.4f}")
+
+        print(f"\n{'='*80}")
+        print(f"中性药物（共 {len(result['neutral'])} 味）")
+        print(f"{'='*80}")
+        print(f"  {', '.join(result['neutral'][:10])}" +
+              (f" ..." if len(result['neutral']) > 10 else ""))
+
+        print("\n" + "=" * 80)

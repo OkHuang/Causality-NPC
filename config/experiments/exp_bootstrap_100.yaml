@@ -1,0 +1,11 @@
+# 实验：Bootstrap 100次
+extends: "../base.yaml"
+
+experiment:
+  name: "exp_bootstrap_100"
+  description: "增加Bootstrap次数到100，获得更稳定的置信区间"
+  tags: ["more_bootstrap", "bootstrap_100"]
+
+effect:
+  bootstrap:
+    n_iterations: 100

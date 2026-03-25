@@ -1,0 +1,10 @@
+# 实验：PC算法alpha=0.01（更严格）
+extends: "../base.yaml"
+
+experiment:
+  name: "exp_alpha_0.01"
+  description: "使用更严格的显著性水平，减少因果边"
+  tags: ["strict_alpha", "alpha_0.01"]
+
+discovery:
+  alpha: 0.01  # 更严格的显著性水平

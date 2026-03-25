@@ -1,44 +1,50 @@
-# ==========================================
 # 鼻咽癌因果推断项目 - 基础配置
-# ==========================================
+# 此文件包含所有默认参数，实验配置可以继承并覆盖
 
 project:
   name: "Causality-NPC"
-  version: "0.1.0"
-  description: "鼻咽癌中西医结合诊疗因果推断与动态网络发现"
+  version: "2.0"
 
-# 数据路径配置
+# 路径配置
 paths:
-  data_dir: "data"
-  raw_data: "data/raw"
-  processed_data: "data/processed"
-  features: "data/features"
-  models: "data/models"
-  outputs: "outputs"
+  raw_data: "Data/raw/npc_full_with_symptoms.csv"
+  outputs_root: "outputs"  # 输出根目录
 
-# 全局设置
-settings:
-  random_seed: 42
-  n_bootstrap: 1000              # Bootstrap重采样次数
-  confidence_threshold: 0.85     # 边置信度阈值
-  max_workers: 4                 # 并行任务数
-  log_level: "INFO"              # 日志级别
+# 步骤1：因果发现配置
+discovery:
+  # 数据处理参数
+  symptom_threshold: 0.10      # 症状频率阈值
+  medicine_threshold: 0.10     # 药物频率阈值（常调参数）
+  diagnosis_threshold: 0.10    # 诊断频率阈值
 
-# 患者队列设置
-cohort:
-  min_follow_up: 30              # 最小随访天数
-  max_time_gap: 180              # 最大时间间隔（天）- 超过则认为因果链断裂
-  min_visits: 2                  # 最小就诊次数
+  # PC算法参数
+  alpha: 0.05                  # 显著性水平（常调参数）
+  independence_test: "fisherz"
+  depth: -1
 
-# 中医知识库配置
-knowledge_base:
-  symptom_dictionary: "docs/knowledge_base/tcm_symptoms.md"
-  herbs_mapping: "docs/knowledge_base/herbs_mapping.md"
-  expert_rules: "docs/knowledge_base/expert_rules.md"
+  # 约束参数
+  apply_constraints: true
+  remove_cycles: true
 
-# 可视化设置
-visualization:
-  figure_dpi: 300
-  style: "seaborn-v0_8-darkgrid"
-  color_palette: "Set2"
-  graph_layout: "hierarchical"   # dag, hierarchical, circular
+# 步骤2：因果效应估计配置
+effect:
+  # 质量过滤
+  min_correlation: 0.0
+  min_sample_size: 20
+
+  # 估计方法
+  method: "logistic_ovr"
+
+  # Bootstrap参数
+  bootstrap:
+    enable: true
+    n_iterations: 50           # Bootstrap次数（可调参数）
+    confidence_level: 0.95
+
+# 步骤3：因果推荐配置
+recommendation:
+  # 推荐参数
+  threshold_positive: 0.05
+  threshold_negative: -0.05
+  top_k: 5
+  max_paths: 5

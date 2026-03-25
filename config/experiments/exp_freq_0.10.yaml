@@ -1,0 +1,7 @@
+# 实验：药物频率阈值0.10（默认）
+extends: "../base.yaml"
+
+experiment:
+  name: "exp_freq_0.10"
+  description: "默认参数：药物频率阈值10%"
+  tags: ["baseline", "freq_0.10"]

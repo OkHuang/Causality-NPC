@@ -36,6 +36,7 @@ env/
 .vscode/
 
 # Data
+Data/
 data/raw/*
 !data/raw/.gitkeep
 data/processed/*

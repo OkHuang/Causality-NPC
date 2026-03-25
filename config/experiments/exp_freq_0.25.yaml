@@ -1,0 +1,10 @@
+# 实验：药物频率阈值0.25
+extends: "../base.yaml"
+
+experiment:
+  name: "exp_freq_0.25"
+  description: "药物频率阈值25%，只保留最高频药物"
+  tags: ["very_high_threshold", "freq_0.25"]
+
+discovery:
+  medicine_threshold: 0.25

@@ -1,0 +1,10 @@
+# 实验：药物频率阈值0.08
+extends: "../base.yaml"
+
+experiment:
+  name: "exp_freq_0.08"
+  description: "降低药物频率阈值到8%，包含更多药物特征"
+  tags: ["low_threshold", "freq_0.08"]
+
+discovery:
+  medicine_threshold: 0.08  # 覆盖base中的值，使用更低的阈值包含更多药物
